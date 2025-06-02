@@ -39,7 +39,7 @@ export function VoiceLinkClient() {
       recognitionRef.current = new SpeechRecognitionAPI();
       recognitionRef.current.continuous = true;
       recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'en-US';
+      recognitionRef.current.lang = 'ar-AE'; // Changed from 'en-US' to 'ar-AE' for Arabic
 
       recognitionRef.current.onresult = (event: any) => {
         let interimTranscription = '';
@@ -121,7 +121,7 @@ export function VoiceLinkClient() {
   const playAgentResponse = useCallback(async (text: string) => {
     if (!text.trim() || !audioRef.current) return;
 
-    setIsAudioPlaying(true); // Set playing true optimistically
+    setIsAudioPlaying(true); 
     try {
       const { audioUrl } = await generateSpeechAction(text);
       if (audioUrl && audioRef.current) {
@@ -414,3 +414,4 @@ declare global {
     voiceURI: string;
   }
 }
+
