@@ -2,20 +2,19 @@
 "use client";
 
 import { useState, useTransition, useRef, useEffect } from 'react';
-import { Mic, Square, XCircle, Loader2, MessageSquareText, Info } from 'lucide-react';
+import { Mic, Square, XCircle, Loader2, MessageSquareText, Info, Bot } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { getSuggestionsAction } from '@/app/actions/voice-link-actions';
+import { getAgentResponseAction } from '@/app/actions/interactive-agent-actions';
 import { useToast } from '@/hooks/use-toast';
 
 export function VoiceLinkClient() {
   const [isRecording, setIsRecording] = useState(false);
   const [transcription, setTranscription] = useState('');
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const [agentResponse, setAgentResponse] = useState<string>('');
+  const [isLoadingAgentResponse, setIsLoadingAgentResponse] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -27,79 +26,79 @@ export function VoiceLinkClient() {
     }
   }, [isRecording]);
 
-  const handleToggleRecording = () => {
-    if (isRecording) {
-      // Stop recording
-      setIsRecording(false);
-      const currentTranscription = transcription.trim();
-      if (currentTranscription) {
-        setError(null);
-        setIsLoadingSuggestions(true);
-        startTransition(async () => {
-          try {
-            const result = await getSuggestionsAction(currentTranscription);
-            if (result.suggestedActions.some(action => action.startsWith("Error:"))) {
-              setError(result.suggestedActions.join(' '));
-              setSuggestions([]);
-              toast({
-                title: "Suggestion Error",
-                description: result.suggestedActions.join(' '),
-                variant: "destructive",
-              });
-            } else {
-              setSuggestions(result.suggestedActions);
-               if (result.suggestedActions.length === 0) {
-                toast({
-                  title: "No Suggestions",
-                  description: "The AI could not find any suggestions for your text.",
-                });
-              } else {
-                 toast({
-                  title: "Suggestions Loaded",
-                  description: "AI suggestions have been successfully loaded.",
-                });
-              }
-            }
-          } catch (e) {
-            const errorMessage = e instanceof Error ? e.message : "An unknown error occurred.";
-            setError(errorMessage);
-            setSuggestions([]);
+  const handleSendMessage = () => {
+    // This function is called when the user stops "recording" or submits text
+    setIsRecording(false); // Stop "recording" UI state
+    const currentTranscription = transcription.trim();
+    if (currentTranscription) {
+      setError(null);
+      setIsLoadingAgentResponse(true);
+      setAgentResponse(''); // Clear previous response
+      startTransition(async () => {
+        try {
+          const result = await getAgentResponseAction(currentTranscription);
+          if (result.agentResponse.startsWith("Sorry, I encountered an error")) {
+            setError(result.agentResponse);
             toast({
-              title: "Error",
-              description: errorMessage,
+              title: "Response Error",
+              description: result.agentResponse,
               variant: "destructive",
             });
-          } finally {
-            setIsLoadingSuggestions(false);
+          } else {
+            setAgentResponse(result.agentResponse);
+            toast({
+              title: "Agent Responded",
+              description: "The agent has replied to your message.",
+            });
           }
-        });
-      } else {
-        setSuggestions([]);
-        toast({
-          title: "Empty Text",
-          description: "Please provide some text to get suggestions.",
-          variant: "default",
-        });
-      }
+        } catch (e) {
+          const errorMessage = e instanceof Error ? e.message : "An unknown error occurred.";
+          setError(errorMessage);
+          setAgentResponse('');
+          toast({
+            title: "Error",
+            description: errorMessage,
+            variant: "destructive",
+          });
+        } finally {
+          setIsLoadingAgentResponse(false);
+        }
+      });
+    } else {
+      setAgentResponse('');
+      toast({
+        title: "Empty Message",
+        description: "Please type or say something to send.",
+        variant: "default",
+      });
+    }
+  };
+
+  const handleToggleRecording = () => {
+    if (isRecording) {
+      handleSendMessage(); // Send the message when stopping recording
     } else {
       // Start recording
       setIsRecording(true);
-      setSuggestions([]);
+      setAgentResponse('');
       setError(null);
       // Optionally clear transcription: setTranscription('');
+      if (textareaRef.current) {
+         textareaRef.current.focus();
+      }
     }
   };
 
   const handleClearText = () => {
     setTranscription('');
-    setSuggestions([]);
+    setAgentResponse('');
     setError(null);
     if (textareaRef.current) {
       textareaRef.current.value = '';
     }
     toast({
-      title: "Text Cleared",
-      description: "The text area and suggestions have been cleared.",
+      title: "Cleared",
+      description: "The text area and agent response have been cleared.",
     });
   };
 
@@ -107,7 +106,9 @@ export function VoiceLinkClient() {
     <div className="flex flex-col items-center justify-center min-h-full p-4 md:p-8">
       <Card className="w-full max-w-2xl shadow-2xl">
         <CardHeader className="text-center">
-          <CardTitle className="font-headline text-4xl tracking-tight">VoiceLink</CardTitle>
+          <CardTitle className="font-headline text-4xl tracking-tight flex items-center justify-center">
+            <Bot className="w-10 h-10 mr-3 text-primary" /> Interactive Agent
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex flex-col items-center space-y-4">
@@ -119,7 +120,7 @@ export function VoiceLinkClient() {
                 isRecording ? 'bg-accent animate-pulse-थो' : 'bg-primary'
               }`}
               aria-pressed={isRecording}
-              aria-label={isRecording ? "Stop recording" : "Start recording"}
+              aria-label={isRecording ? "Stop recording and send" : "Start recording / Open mic"}
             >
               {isRecording ? (
                 <Square className="w-12 h-12" />
@@ -128,24 +129,30 @@ export function VoiceLinkClient() {
               )}
             </Button>
             <p className="text-sm text-muted-foreground h-5">
-              {isRecording ? "Recording... (Tap to stop)" : "Tap to start recording (simulated)"}
+              {isRecording ? "Recording... (Tap to stop & send)" : "Tap to talk (simulated)"}
             </p>
           </div>
 
           <div className="space-y-2">
             <label htmlFor="transcription-area" className="font-medium text-foreground font-headline text-lg flex items-center">
               <MessageSquareText className="w-5 h-5 mr-2 text-primary" />
-              Your Text
+              Your Message
             </label>
             <Textarea
               id="transcription-area"
               ref={textareaRef}
               value={transcription}
               onChange={(e) => setTranscription(e.target.value)}
-              placeholder={isRecording ? "Listening... (type your simulated voice input here)" : "Your transcribed text will appear here..."}
-              rows={5}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendMessage();
+                }
+              }}
+              placeholder={isRecording ? "Listening... (type your message here)" : "Type your message to the agent..."}
+              rows={4}
               className="shadow-sm focus:ring-2 focus:ring-primary"
-              aria-label="Transcription text area"
+              aria-label="Your message to the agent"
             />
           </div>
 
@@ -157,30 +164,34 @@ export function VoiceLinkClient() {
             </Alert>
           )}
 
-          {(isLoadingSuggestions || isPending) && (
+          {(isLoadingAgentResponse || isPending) && (
             <div className="flex items-center justify-center p-4 space-x-2 text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <span>Loading suggestions...</span>
+              <span>Agent is thinking...</span>
             </div>
           )}
 
-          {!isLoadingSuggestions && !isPending && suggestions.length > 0 && (
+          {!isLoadingAgentResponse && !isPending && agentResponse && (
             <div className="space-y-3">
-              <h3 className="font-headline text-lg font-medium text-foreground">Suggested Actions:</h3>
-              <div className="flex flex-wrap gap-2">
-                {suggestions.map((suggestion, index) => (
-                  <Badge key={index} variant="secondary" className="text-sm px-3 py-1 shadow-sm bg-accent/20 text-accent-foreground border-accent">
-                    {suggestion}
-                  </Badge>
-                ))}
-              </div>
+              <h3 className="font-headline text-lg font-medium text-foreground flex items-center">
+                <Bot className="w-5 h-5 mr-2 text-primary" />
+                Agent's Response:
+              </h3>
+              <Card className="bg-muted/50 p-4 shadow-inner">
+                <CardContent className="p-0">
+                  <p className="text-foreground whitespace-pre-wrap">{agentResponse}</p>
+                </CardContent>
+              </Card>
             </div>
           )}
         </CardContent>
-        <CardFooter>
-          <Button onClick={handleClearText} variant="outline" className="w-full shadow-sm hover:bg-muted active:scale-95 transition-transform">
+        <CardFooter className="flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4">
+           <Button onClick={handleSendMessage} variant="default" className="w-full sm:w-auto flex-1 shadow-sm hover:bg-primary/90 active:scale-95 transition-transform" disabled={isLoadingAgentResponse || isPending || !transcription.trim()}>
+            Send Message
+          </Button>
+          <Button onClick={handleClearText} variant="outline" className="w-full sm:w-auto flex-1 shadow-sm hover:bg-muted active:scale-95 transition-transform">
             <XCircle className="w-5 h-5 mr-2" />
-            Clear Text & Suggestions
+            Clear
           </Button>
         </CardFooter>
       </Card>
