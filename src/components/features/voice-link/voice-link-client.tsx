@@ -86,6 +86,10 @@ export function VoiceLinkClient() {
       if (textareaRef.current) {
          textareaRef.current.focus();
       }
+      toast({
+        title: "Voice Input (Simulated)",
+        description: "This is a simulated voice input. Please type your message in the text area below.",
+      });
     }
   };
 
