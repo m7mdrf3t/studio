@@ -1,8 +1,9 @@
 
 "use client";
 
+import type { DayOffDetails } from '@/ai/flows/interactive-agent-flow'; // Import the type
 import { useState, useTransition, useRef, useEffect, useCallback } from 'react';
-import { Mic, Square, XCircle, Loader2, MessageSquareText, Info, Bot, MicOff, Volume2, PlayCircle } from 'lucide-react';
+import { Mic, Square, XCircle, Loader2, MessageSquareText, Info, Bot, MicOff, Volume2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
@@ -26,6 +27,7 @@ export function VoiceLinkClient() {
   const [microphoneError, setMicrophoneError] = useState<string | null>(null);
   const [hasMicrophonePermission, setHasMicrophonePermission] = useState<boolean | null>(null);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [currentDayOffRequestDetails, setCurrentDayOffRequestDetails] = useState<DayOffDetails | null>(null);
   const [isPending, startTransition] = useTransition();
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -43,12 +45,25 @@ export function VoiceLinkClient() {
 
       recognitionRef.current.onresult = (event: any) => {
         let fullTranscript = '';
-        // Iterate over all results received in this session so far
-        // to build the complete current transcription.
         for (let i = 0; i < event.results.length; ++i) {
-          fullTranscript += event.results[i][0].transcript;
+          if (event.results[i].isFinal && event.results[i][0].confidence > 0) {
+             fullTranscript += event.results[i][0].transcript;
+          } else if (!event.results[i].isFinal) {
+             fullTranscript += event.results[i][0].transcript;
+          }
         }
-        setTranscription(fullTranscript);
+         // More robust way to build the final transcript from interim results
+        let interim_transcript = "";
+        let final_transcript = "";
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+                final_transcript += event.results[i][0].transcript;
+            } else {
+                interim_transcript += event.results[i][0].transcript;
+            }
+        }
+        // Use the most complete transcript available (final if it exists, otherwise interim)
+        setTranscription(final_transcript || interim_transcript);
       };
 
       recognitionRef.current.onerror = (event: any) => {
@@ -58,9 +73,9 @@ export function VoiceLinkClient() {
       };
 
       recognitionRef.current.onend = () => {
-        // If recognition ends unexpectedly (not by user stopping), update recording state.
-        // However, we mostly control stop via button click.
-        // setIsRecording(false); // Consider if this is needed or could conflict
+        // If recognition ends unexpectedly and not by user explicit stop,
+        // we might want to handle it. For now, user explicitly stops.
+        // setIsRecording(false); 
       };
 
     } else {
@@ -94,7 +109,7 @@ export function VoiceLinkClient() {
     audioRef.current = new Audio();
     audioRef.current.onplay = () => setIsAudioPlaying(true);
     audioRef.current.onended = () => setIsAudioPlaying(false);
-    audioRef.current.onpause = () => setIsAudioPlaying(false); // Also handle pause
+    audioRef.current.onpause = () => setIsAudioPlaying(false);
     audioRef.current.onerror = () => {
       setIsAudioPlaying(false);
       toast({
@@ -151,7 +166,7 @@ export function VoiceLinkClient() {
         });
       } else if (!audioUrl) {
         setIsAudioPlaying(false);
-         if (text.trim()) { // Only show toast if text was not empty
+         if (text.trim()) {
             toast({
                 title: "Speech Generation Failed",
                 description: "Could not generate audio for the response. Check API key or service.",
@@ -172,9 +187,9 @@ export function VoiceLinkClient() {
 
   const handleSendMessage = useCallback(() => {
     if (isRecording && recognitionRef.current) {
-      recognitionRef.current.stop(); // This will trigger onend, which might setIsRecording(false)
+      recognitionRef.current.stop();
     }
-    setIsRecording(false); // Ensure it's set false here too
+    setIsRecording(false);
 
     if (audioRef.current && !audioRef.current.paused) {
       audioRef.current.pause();
@@ -188,9 +203,15 @@ export function VoiceLinkClient() {
       setIsLoadingAgentResponse(true);
       setAgentResponse('');
 
+      // Prepare previousDayOffRequestDetails to send if applicable
+      const detailsToSend = 
+        currentDayOffRequestDetails && !currentDayOffRequestDetails.isComplete 
+        ? currentDayOffRequestDetails 
+        : undefined;
+
       startTransition(async () => {
         try {
-          const result = await getAgentResponseAction(currentTranscription);
+          const result = await getAgentResponseAction(currentTranscription, detailsToSend);
           if (result.agentResponse.startsWith("Sorry, I encountered an error")) {
             setError(result.agentResponse);
             toast({
@@ -200,9 +221,11 @@ export function VoiceLinkClient() {
             });
           } else {
             setAgentResponse(result.agentResponse);
+            // Update day-off details state from the response
+            setCurrentDayOffRequestDetails(result.dayOffRequestDetails || null);
+            
             toast({
               title: "Agent Responded",
-              // description: "The agent has replied to your message.", // Too verbose
             });
             await playAgentResponse(result.agentResponse);
           }
@@ -228,7 +251,7 @@ export function VoiceLinkClient() {
       });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transcription, isRecording, toast, playAgentResponse]);
+  }, [transcription, isRecording, toast, playAgentResponse, currentDayOffRequestDetails]);
 
 
   const handleToggleRecording = () => {
@@ -254,15 +277,14 @@ export function VoiceLinkClient() {
 
     if (isRecording) {
       recognitionRef.current.stop();
-      setIsRecording(false); // State update
-      // handleSendMessage will be called if transcription has content due to onend or next check
+      setIsRecording(false);
       if (transcription.trim()) {
-         // Small delay to allow final transcription processing from onresult if any
-        setTimeout(() => handleSendMessage(), 100);
+        setTimeout(() => handleSendMessage(), 100); // Allow final transcription processing
       }
     } else {
-      setTranscription('');
-      setAgentResponse('');
+      // Clear transcription for new recording, but keep agentResponse and dayOffDetails for context
+      setTranscription(''); 
+      // setAgentResponse(''); // Don't clear agent response when starting new recording, user might be responding to it
       setError(null);
       setMicrophoneError(null);
       try {
@@ -294,12 +316,13 @@ export function VoiceLinkClient() {
     setAgentResponse('');
     setError(null);
     setMicrophoneError(null);
+    setCurrentDayOffRequestDetails(null); // Clear day-off context as well
     if (textareaRef.current) {
-      textareaRef.current.value = ''; // Also clear the textarea visually
+      textareaRef.current.value = '';
     }
     toast({
       title: "Cleared",
-      description: "The text area and agent response have been cleared.",
+      description: "The text area, agent response, and any ongoing request details have been cleared.",
     });
   };
 
@@ -363,7 +386,7 @@ export function VoiceLinkClient() {
             <Textarea
               id="transcription-area"
               ref={textareaRef}
-              value={transcription} // Controlled component
+              value={transcription} 
               onChange={(e) => setTranscription(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -379,7 +402,7 @@ export function VoiceLinkClient() {
             />
           </div>
 
-          {error && !microphoneError && ( // Only show general error if no mic error
+          {error && !microphoneError && (
             <Alert variant="destructive">
               <Info className="h-4 w-4" />
               <AlertTitle>Agent Error</AlertTitle>
@@ -417,6 +440,18 @@ export function VoiceLinkClient() {
                 </CardContent>
               </Card>
             </div>
+          )}
+           {currentDayOffRequestDetails && !currentDayOffRequestDetails.isComplete && (
+            <Alert variant="default" className="mt-4">
+              <Info className="h-4 w-4" />
+              <AlertTitle>Ongoing Day-Off Request</AlertTitle>
+              <AlertDescription>
+                The agent is currently gathering details for your day-off request.
+                {currentDayOffRequestDetails.days && <p>Days: {currentDayOffRequestDetails.days}</p>}
+                {currentDayOffRequestDetails.startDate && <p>Start Date: {currentDayOffRequestDetails.startDate}</p>}
+                {currentDayOffRequestDetails.reason && <p>Reason: {currentDayOffRequestDetails.reason}</p>}
+              </AlertDescription>
+            </Alert>
           )}
         </CardContent>
         <CardFooter className="flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4">
