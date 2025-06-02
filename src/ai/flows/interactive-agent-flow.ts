@@ -118,11 +118,12 @@ const interactiveAgentFlow = ai.defineFlow(
     const intentOutput: UserIntentOutput = await recognizeUserIntent(intentInput);
     let recognizedIntent = intentOutput.intent;
 
-    let agentResponseText: string;
-    let dayOffDetails: DayOffDetails | undefined = input.previousDayOffRequestDetails?.isComplete === false ? input.previousDayOffRequestDetails : undefined;
+    let agentResponseText: string = "Sorry, I'm not sure how to respond to that."; // Initialize with a default
+    let currentDayOffDetails: DayOffDetails | undefined = 
+        input.previousDayOffRequestDetails?.isComplete === false ? input.previousDayOffRequestDetails : undefined;
 
     // If we have ongoing day-off details and the new intent isn't something totally different, assume we're continuing.
-    if (dayOffDetails && recognizedIntent !== "SUBMIT_COMPLAINT" && recognizedIntent !== "REQUEST_REFERRAL") {
+    if (currentDayOffDetails && recognizedIntent !== "SUBMIT_COMPLAINT" && recognizedIntent !== "REQUEST_REFERRAL") {
         recognizedIntent = "REQUEST_DAY_OFF"; // Force context if continuing a day-off request
     }
 
@@ -131,56 +132,51 @@ const interactiveAgentFlow = ai.defineFlow(
       case "REQUEST_DAY_OFF":
         const dayOffPromptInput: z.infer<typeof DayOffPromptInputSchema> = {
           userInput: input.userInput,
-          daysPreviouslyCollected: dayOffDetails?.days,
-          startDatePreviouslyCollected: dayOffDetails?.startDate,
-          reasonPreviouslyCollected: dayOffDetails?.reason,
+          daysPreviouslyCollected: currentDayOffDetails?.days,
+          startDatePreviouslyCollected: currentDayOffDetails?.startDate,
+          reasonPreviouslyCollected: currentDayOffDetails?.reason,
         };
         const { output: dayOffOutputFromPrompt } = await dayOffDetailsPrompt(dayOffPromptInput);
 
         if (dayOffOutputFromPrompt) {
           agentResponseText = dayOffOutputFromPrompt.responseText;
-          dayOffDetails = dayOffOutputFromPrompt; // This is the full, updated details object
+          currentDayOffDetails = dayOffOutputFromPrompt; 
           if (dayOffOutputFromPrompt.isComplete) {
             console.log(`SIMULATED ACTION: Day-off request fully processed and logged: Days: ${dayOffOutputFromPrompt.days}, StartDate: ${dayOffOutputFromPrompt.startDate}, Reason: ${dayOffOutputFromPrompt.reason}`);
-            // dayOffDetails will be sent back to client; if isComplete is true, client should stop sending it back.
           }
         } else {
           agentResponseText = "I'm having a little trouble processing that day-off request. Could you please try rephrasing?";
-           // Potentially clear dayOffDetails or handle error state more gracefully
-          dayOffDetails = undefined;
+          currentDayOffDetails = undefined; // Clear details if prompt failed
         }
         break;
       case "SUBMIT_COMPLAINT":
         agentResponseText = "I'm sorry to hear you have a complaint. I've logged it for review. (This is a simulated action)";
         console.log(`ACTION TRIGGERED: User intent: SUBMIT_COMPLAINT for input: "${input.userInput}"`);
-        dayOffDetails = undefined; // Clear any ongoing day-off context
+        currentDayOffDetails = undefined; // Clear any ongoing day-off context
         break;
       case "REQUEST_REFERRAL":
         agentResponseText = "You're looking to make a referral? I've noted that down and someone will follow up. (This is a simulated action)";
         console.log(`ACTION TRIGGERED: User intent: REQUEST_REFERRAL for input: "${input.userInput}"`);
-        dayOffDetails = undefined; // Clear any ongoing day-off context
+        currentDayOffDetails = undefined; // Clear any ongoing day-off context
         break;
       case "GENERAL_CONVERSATION":
       case "UNKNOWN_INTENT":
       default:
         const {output: generalOutput} = await generalConversationPrompt({userInput: input.userInput});
         agentResponseText = generalOutput?.agentResponse || "Sorry, I'm not sure how to respond to that.";
-        // If it was a general conversation but there was an incomplete dayOffRequest,
-        // we might want to clear dayOffDetails or prompt if they want to continue.
-        // For now, if intent recognition says it's general, we clear day-off context.
-        if (input.previousDayOffRequestDetails && !input.previousDayOffRequestDetails.isComplete) {
-            // Heuristic: if user switches topic away from an incomplete day off request, we might want to abandon it.
-            // For now, let's preserve dayOffDetails unless it's explicitly cleared by another intent.
-            // This could be refined by having the generalConversationPrompt also assess if a day-off abandon happened.
-        }
-         // if the user switches topic, we might want to clear the dayOffDetails.
-        // For now, let's clear it if it's not an explicit day off request.
-        if (recognizedIntent !== "REQUEST_DAY_OFF") {
-            dayOffDetails = undefined;
+        // If the intent recognition decided it's general/unknown, clear any day-off context.
+        // The earlier logic might have forced recognizedIntent to REQUEST_DAY_OFF if currentDayOffDetails existed.
+        // Here, we respect the *original* intent if it wasn't a day-off continuation.
+        if (intentOutput.intent !== "REQUEST_DAY_OFF" && intentOutput.intent !== "GENERAL_CONVERSATION" ) {
+            currentDayOffDetails = undefined;
+        } else if (intentOutput.intent === "GENERAL_CONVERSATION" && currentDayOffDetails && !currentDayOffDetails.isComplete) {
+            // If it's general chat but a day-off request is incomplete, we might ask if they want to continue.
+            // For now, we preserve currentDayOffDetails unless an explicit "cancel" was in userInput (handled by dayOffDetailsPrompt).
+            // Or if they start a new, different actionable intent.
         }
         break;
     }
-    return { agentResponse: agentResponseText, recognizedIntent, dayOffRequestDetails };
+    return { agentResponse: agentResponseText, recognizedIntent, dayOffRequestDetails: currentDayOffDetails };
   }
 );
 
