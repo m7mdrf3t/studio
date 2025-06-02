@@ -1,11 +1,15 @@
+
 'use server';
 /**
- * @fileOverview A Genkit flow for generating speech from text.
- * This is a simulated version that returns a placeholder audio URL.
+ * @fileOverview A Genkit flow for generating speech from text using ElevenLabs.
  *
- * - generateSpeech - A function that takes text and returns a URL to an audio file.
+ * - generateSpeech - A function that takes text and returns a URL (data URI) to an audio file.
  * - TextToSpeechInput - The input type for the generateSpeech function.
  * - TextToSpeechOutput - The return type for the generateSpeech function.
+ *
+ * Environment Variables Required:
+ * - ELEVENLABS_API_KEY: Your API key for ElevenLabs.
+ * - ELEVENLABS_VOICE_ID: The ID of the voice you want to use from ElevenLabs.
  */
 
 import {ai} from '@/ai/genkit';
@@ -17,14 +21,11 @@ const TextToSpeechInputSchema = z.object({
 export type TextToSpeechInput = z.infer<typeof TextToSpeechInputSchema>;
 
 const TextToSpeechOutputSchema = z.object({
-  audioUrl: z.string().url().describe('A URL to the generated audio file.'),
+  audioUrl: z.string().describe('A data URI or URL to the generated audio file.'),
 });
 export type TextToSpeechOutput = z.infer<typeof TextToSpeechOutputSchema>;
 
-// In a real scenario, this flow would call a cloud TTS API (e.g., Google Cloud TTS, Amazon Polly)
-// using an SDK and API keys stored securely on the server.
-// It would then typically upload the generated audio to a storage service (like Firebase Storage)
-// and return a public URL to that audio file.
+const ELEVENLABS_API_BASE_URL = 'https://api.elevenlabs.io/v1';
 
 const textToSpeechFlow = ai.defineFlow(
   {
@@ -33,28 +34,68 @@ const textToSpeechFlow = ai.defineFlow(
     outputSchema: TextToSpeechOutputSchema,
   },
   async ({text}) => {
-    // Simulate TTS processing delay (optional)
-    // await new Promise(resolve => setTimeout(resolve, 500));
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    const voiceId = process.env.ELEVENLABS_VOICE_ID;
 
-    // For demonstration, we return a URL to a known, short, public domain audio file.
-    // Replace this with your actual TTS service logic.
-    // Example placeholder sound:
-    const placeholderAudioUrl = 'https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg';
-    // const placeholderAudioUrl = 'https://www.soundjay.com/button/sounds/button-1.wav'; // Another option
+    if (!apiKey) {
+      console.error('ElevenLabs API key is not configured.');
+      // Fallback to a silent audio or an error message audio if preferred
+      return { audioUrl: 'data:audio/mpeg;base64,' }; // Empty MP3 data URI
+    }
+    if (!voiceId) {
+      console.error('ElevenLabs Voice ID is not configured.');
+      return { audioUrl: 'data:audio/mpeg;base64,' };
+    }
 
     if (!text || text.trim() === "") {
-      // Or handle this case based on how your actual TTS service would behave
       return { audioUrl: '' };
     }
-    
-    console.log(`Simulating TTS for text: "${text}". Returning placeholder URL: ${placeholderAudioUrl}`);
-    return { audioUrl: placeholderAudioUrl };
+
+    const ttsUrl = `${ELEVENLABS_API_BASE_URL}/text-to-speech/${voiceId}`;
+
+    try {
+      const response = await fetch(ttsUrl, {
+        method: 'POST',
+        headers: {
+          'Accept': 'audio/mpeg',
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          text: text,
+          model_id: 'eleven_multilingual_v2', // Or your preferred model
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+            // style: 0.0, // Uncomment and set if using a model that supports style_exaggeration
+            // use_speaker_boost: true
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(`ElevenLabs API Error (${response.status}): ${errorBody}`);
+        // Consider returning a pre-recorded error sound or specific error message
+        return { audioUrl: 'data:audio/mpeg;base64,' }; // Empty/silent audio on error
+      }
+
+      const audioArrayBuffer = await response.arrayBuffer();
+      const audioBase64 = Buffer.from(audioArrayBuffer).toString('base64');
+      const audioDataUri = `data:audio/mpeg;base64,${audioBase64}`;
+      
+      console.log(`Successfully generated speech with ElevenLabs for text: "${text}"`);
+      return { audioUrl: audioDataUri };
+
+    } catch (error) {
+      console.error('Error calling ElevenLabs API:', error);
+      return { audioUrl: 'data:audio/mpeg;base64,' }; // Empty/silent audio on error
+    }
   }
 );
 
 export async function generateSpeech(input: TextToSpeechInput): Promise<TextToSpeechOutput> {
   if (!input.text.trim()) {
-    // Return an empty URL or handle as an error if no text is provided to synthesize
     return { audioUrl: '' };
   }
   return textToSpeechFlow(input);
