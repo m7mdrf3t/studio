@@ -3,6 +3,7 @@
 "use client";
 
 import { useState, useTransition, useRef, useEffect, useCallback } from 'react';
+import type { SpeechSynthesisVoice } from 'react-speech-recognition'; // Assuming this type exists or define manually
 import { Mic, Square, XCircle, Loader2, MessageSquareText, Info, Bot, MicOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -19,7 +20,7 @@ interface IWindow extends Window {
 declare const window: IWindow;
 
 export function VoiceLinkClient() {
-  const [isRecording, setIsRecording] = useState(false); // True when actively listening via microphone
+  const [isRecording, setIsRecording] = useState(false);
   const [transcription, setTranscription] = useState('');
   const [agentResponse, setAgentResponse] = useState<string>('');
   const [isLoadingAgentResponse, setIsLoadingAgentResponse] = useState(false);
@@ -28,16 +29,18 @@ export function VoiceLinkClient() {
   const [hasMicrophonePermission, setHasMicrophonePermission] = useState<boolean | null>(null);
   const [isPending, startTransition] = useTransition();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const recognitionRef = useRef<any | null>(null); // SpeechRecognition instance
+  const recognitionRef = useRef<any | null>(null);
   const { toast } = useToast();
 
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState<SpeechSynthesisVoice | null>(null);
+
   useEffect(() => {
-    // Initialize SpeechRecognition
     const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognitionAPI) {
       recognitionRef.current = new SpeechRecognitionAPI();
-      recognitionRef.current.continuous = true; // Keep listening even after a pause
-      recognitionRef.current.interimResults = true; // Get results as they come
+      recognitionRef.current.continuous = true;
+      recognitionRef.current.interimResults = true;
       recognitionRef.current.lang = 'en-US';
 
       recognitionRef.current.onresult = (event: any) => {
@@ -60,18 +63,13 @@ export function VoiceLinkClient() {
       };
 
       recognitionRef.current.onend = () => {
-        // Only set isRecording to false if it wasn't manually stopped
-        // This handles cases where recognition stops unexpectedly
-        if (recognitionRef.current && isRecording) {
-           // setIsRecording(false); // Decided against auto-stopping visual, user explicitly stops
-        }
+        //
       };
     } else {
       setMicrophoneError("Speech Recognition API is not supported by your browser. Please type your message.");
       setHasMicrophonePermission(false);
     }
 
-    // Request microphone permission
     const getMicrophonePermission = async () => {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setMicrophoneError("Microphone access is not supported by your browser.");
@@ -95,6 +93,33 @@ export function VoiceLinkClient() {
     };
     getMicrophonePermission();
 
+    // Load and select TTS voices
+    const loadVoices = () => {
+      if ('speechSynthesis' in window) {
+        const voices = window.speechSynthesis.getVoices();
+        setAvailableVoices(voices);
+        if (voices.length > 0) {
+          let bestVoice =
+            voices.find(voice => voice.lang === 'en-US' && !voice.localService && voice.name.toLowerCase().includes('google')) ||
+            voices.find(voice => voice.lang === 'en-US' && !voice.localService && voice.name.toLowerCase().includes('microsoft')) ||
+            voices.find(voice => voice.lang === 'en-US' && !voice.localService && voice.name.toLowerCase().includes('natural')) ||
+            voices.find(voice => voice.lang === 'en-US' && !voice.localService && voice.name.toLowerCase().includes('neural')) ||
+            voices.find(voice => voice.lang === 'en-US' && !voice.localService) ||
+            voices.find(voice => voice.lang === 'en-US' && voice.name.toLowerCase().includes('google')) ||
+            voices.find(voice => voice.lang === 'en-US' && voice.name.toLowerCase().includes('microsoft')) ||
+            voices.find(voice => voice.lang === 'en-US');
+          
+          setSelectedVoice(bestVoice || voices.find(v => v.lang.startsWith('en')) || voices[0]);
+        }
+      }
+    };
+
+    if ('speechSynthesis' in window) {
+      loadVoices();
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+
+
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
@@ -105,27 +130,28 @@ export function VoiceLinkClient() {
       }
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
+        window.speechSynthesis.onvoiceschanged = null;
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount
+  }, []);
 
 
   const handleSendMessage = useCallback(() => {
     if (isRecording && recognitionRef.current) {
-      recognitionRef.current.stop(); // Stop speech recognition if it's active
+      recognitionRef.current.stop();
     }
     setIsRecording(false);
 
     if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel(); // Cancel any ongoing speech
+      window.speechSynthesis.cancel();
     }
 
     const currentTranscription = transcription.trim();
     if (currentTranscription) {
       setError(null);
       setIsLoadingAgentResponse(true);
-      setAgentResponse(''); // Clear previous response
+      setAgentResponse('');
 
       startTransition(async () => {
         try {
@@ -144,12 +170,17 @@ export function VoiceLinkClient() {
               description: "The agent has replied to your message.",
             });
 
-            // Speak the response
             if ('speechSynthesis' in window && 'SpeechSynthesisUtterance' in window) {
               const utterance = new SpeechSynthesisUtterance(result.agentResponse);
-              // You can optionally configure voice, rate, pitch here
-              // e.g., utterance.lang = 'en-US';
-              // utterance.rate = 1.0; // Speed of speech
+              if (selectedVoice) {
+                utterance.voice = selectedVoice;
+                utterance.lang = selectedVoice.lang;
+              } else {
+                utterance.lang = 'en-US'; // Fallback language
+              }
+              utterance.rate = 0.9; // Slightly slower rate
+              utterance.pitch = 1.0;
+              utterance.volume = 1.0;
               window.speechSynthesis.speak(utterance);
             } else {
               console.warn("Text-to-speech is not supported in this browser.");
@@ -182,12 +213,12 @@ export function VoiceLinkClient() {
       });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transcription, isRecording, toast]);
+  }, [transcription, isRecording, toast, selectedVoice]);
 
 
   const handleToggleRecording = () => {
     if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel(); // Cancel any ongoing speech
+      window.speechSynthesis.cancel();
     }
 
     if (!hasMicrophonePermission) {
@@ -208,10 +239,11 @@ export function VoiceLinkClient() {
       recognitionRef.current.stop();
       setIsRecording(false);
       if (transcription.trim()) {
-        handleSendMessage();
+        // Wait a brief moment for final transcription results
+        setTimeout(() => handleSendMessage(), 100);
       }
     } else {
-      setTranscription(''); 
+      setTranscription('');
       setAgentResponse('');
       setError(null);
       setMicrophoneError(null);
@@ -235,7 +267,7 @@ export function VoiceLinkClient() {
       recognitionRef.current.stop();
     }
     if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel(); // Cancel any ongoing speech
+      window.speechSynthesis.cancel();
     }
     setIsRecording(false);
     setTranscription('');
@@ -243,7 +275,7 @@ export function VoiceLinkClient() {
     setError(null);
     setMicrophoneError(null);
     if (textareaRef.current) {
-      textareaRef.current.value = ''; 
+      textareaRef.current.value = '';
     }
     toast({
       title: "Cleared",
@@ -310,8 +342,8 @@ export function VoiceLinkClient() {
             <Textarea
               id="transcription-area"
               ref={textareaRef}
-              value={transcription} 
-              onChange={(e) => setTranscription(e.target.value)} 
+              value={transcription}
+              onChange={(e) => setTranscription(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -326,7 +358,7 @@ export function VoiceLinkClient() {
             />
           </div>
 
-          {error && !microphoneError && ( 
+          {error && !microphoneError && (
             <Alert variant="destructive">
               <Info className="h-4 w-4" />
               <AlertTitle>Agent Error</AlertTitle>
@@ -369,3 +401,13 @@ export function VoiceLinkClient() {
   );
 }
 
+// Define SpeechSynthesisVoice type if not available from a library
+declare global {
+  interface SpeechSynthesisVoice {
+    default: boolean;
+    lang: string;
+    localService: boolean;
+    name: string;
+    voiceURI: string;
+  }
+}
