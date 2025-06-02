@@ -1,18 +1,16 @@
 
-// src/components/features/voice-link/voice-link-client.tsx
 "use client";
 
 import { useState, useTransition, useRef, useEffect, useCallback } from 'react';
-import type { SpeechSynthesisVoice } from 'react-speech-recognition'; // Assuming this type exists or define manually
-import { Mic, Square, XCircle, Loader2, MessageSquareText, Info, Bot, MicOff } from 'lucide-react';
+import { Mic, Square, XCircle, Loader2, MessageSquareText, Info, Bot, MicOff, Volume2, PlayCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { getAgentResponseAction } from '@/app/actions/interactive-agent-actions';
+import { generateSpeechAction } from '@/app/actions/text-to-speech-actions';
 import { useToast } from '@/hooks/use-toast';
 
-// Extend window type for SpeechRecognition
 interface IWindow extends Window {
   SpeechRecognition: any;
   webkitSpeechRecognition: any;
@@ -27,13 +25,13 @@ export function VoiceLinkClient() {
   const [error, setError] = useState<string | null>(null);
   const [microphoneError, setMicrophoneError] = useState<string | null>(null);
   const [hasMicrophonePermission, setHasMicrophonePermission] = useState<boolean | null>(null);
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [isPending, startTransition] = useTransition();
+  
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const { toast } = useToast();
-
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [selectedVoice, setSelectedVoice] = useState<SpeechSynthesisVoice | null>(null);
 
   useEffect(() => {
     const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -60,10 +58,6 @@ export function VoiceLinkClient() {
         console.error('Speech recognition error', event.error);
         setMicrophoneError(`Speech recognition error: ${event.error}. Please try again or type your message.`);
         setIsRecording(false);
-      };
-
-      recognitionRef.current.onend = () => {
-        //
       };
     } else {
       setMicrophoneError("Speech Recognition API is not supported by your browser. Please type your message.");
@@ -93,49 +87,64 @@ export function VoiceLinkClient() {
     };
     getMicrophonePermission();
 
-    // Load and select TTS voices
-    const loadVoices = () => {
-      if ('speechSynthesis' in window) {
-        const voices = window.speechSynthesis.getVoices();
-        setAvailableVoices(voices);
-        if (voices.length > 0) {
-          let bestVoice =
-            voices.find(voice => voice.lang === 'en-US' && !voice.localService && voice.name.toLowerCase().includes('google')) ||
-            voices.find(voice => voice.lang === 'en-US' && !voice.localService && voice.name.toLowerCase().includes('microsoft')) ||
-            voices.find(voice => voice.lang === 'en-US' && !voice.localService && voice.name.toLowerCase().includes('natural')) ||
-            voices.find(voice => voice.lang === 'en-US' && !voice.localService && voice.name.toLowerCase().includes('neural')) ||
-            voices.find(voice => voice.lang === 'en-US' && !voice.localService) ||
-            voices.find(voice => voice.lang === 'en-US' && voice.name.toLowerCase().includes('google')) ||
-            voices.find(voice => voice.lang === 'en-US' && voice.name.toLowerCase().includes('microsoft')) ||
-            voices.find(voice => voice.lang === 'en-US');
-          
-          setSelectedVoice(bestVoice || voices.find(v => v.lang.startsWith('en')) || voices[0]);
-        }
-      }
+    // Setup audio element
+    audioRef.current = new Audio();
+    audioRef.current.onplay = () => setIsAudioPlaying(true);
+    audioRef.current.onended = () => setIsAudioPlaying(false);
+    audioRef.current.onerror = () => {
+      setIsAudioPlaying(false);
+      toast({
+        title: "Audio Playback Error",
+        description: "Could not play the agent's response.",
+        variant: "destructive",
+      });
     };
-
-    if ('speechSynthesis' in window) {
-      loadVoices();
-      window.speechSynthesis.onvoiceschanged = loadVoices;
-    }
-
 
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
         recognitionRef.current.onresult = null;
         recognitionRef.current.onerror = null;
-        recognitionRef.current.onend = null;
         recognitionRef.current = null;
       }
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        window.speechSynthesis.onvoiceschanged = null;
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+        audioRef.current.onplay = null;
+        audioRef.current.onended = null;
+        audioRef.current.onerror = null;
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const playAgentResponse = useCallback(async (text: string) => {
+    if (!text.trim() || !audioRef.current) return;
+
+    setIsAudioPlaying(true); // Set playing true optimistically
+    try {
+      const { audioUrl } = await generateSpeechAction(text);
+      if (audioUrl && audioRef.current) {
+        audioRef.current.src = audioUrl;
+        await audioRef.current.play();
+      } else if (!audioUrl) {
+        setIsAudioPlaying(false);
+        toast({
+          title: "Speech Generation Failed",
+          description: "Could not generate audio for the agent's response.",
+          variant: "default",
+        });
+      }
+    } catch (e) {
+      console.error("Error playing speech:", e);
+      setIsAudioPlaying(false);
+      toast({
+        title: "Speech Error",
+        description: "An error occurred while trying to play the agent's voice.",
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
 
   const handleSendMessage = useCallback(() => {
     if (isRecording && recognitionRef.current) {
@@ -143,8 +152,9 @@ export function VoiceLinkClient() {
     }
     setIsRecording(false);
 
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+    if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
     }
 
     const currentTranscription = transcription.trim();
@@ -169,27 +179,7 @@ export function VoiceLinkClient() {
               title: "Agent Responded",
               description: "The agent has replied to your message.",
             });
-
-            if ('speechSynthesis' in window && 'SpeechSynthesisUtterance' in window) {
-              const utterance = new SpeechSynthesisUtterance(result.agentResponse);
-              if (selectedVoice) {
-                utterance.voice = selectedVoice;
-                utterance.lang = selectedVoice.lang;
-              } else {
-                utterance.lang = 'en-US'; // Fallback language
-              }
-              utterance.rate = 0.9; // Slightly slower rate
-              utterance.pitch = 1.0;
-              utterance.volume = 1.0;
-              window.speechSynthesis.speak(utterance);
-            } else {
-              console.warn("Text-to-speech is not supported in this browser.");
-              toast({
-                title: "Text-to-Speech Not Supported",
-                description: "Your browser does not support speaking the agent's response.",
-                variant: "default"
-              });
-            }
+            await playAgentResponse(result.agentResponse);
           }
         } catch (e) {
           const errorMessage = e instanceof Error ? e.message : "An unknown error occurred.";
@@ -213,12 +203,13 @@ export function VoiceLinkClient() {
       });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transcription, isRecording, toast, selectedVoice]);
+  }, [transcription, isRecording, toast, playAgentResponse]);
 
 
   const handleToggleRecording = () => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+    if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
     }
 
     if (!hasMicrophonePermission) {
@@ -239,7 +230,6 @@ export function VoiceLinkClient() {
       recognitionRef.current.stop();
       setIsRecording(false);
       if (transcription.trim()) {
-        // Wait a brief moment for final transcription results
         setTimeout(() => handleSendMessage(), 100);
       }
     } else {
@@ -266,8 +256,9 @@ export function VoiceLinkClient() {
     if (isRecording && recognitionRef.current) {
       recognitionRef.current.stop();
     }
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+     if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
     }
     setIsRecording(false);
     setTranscription('');
@@ -366,7 +357,7 @@ export function VoiceLinkClient() {
             </Alert>
           )}
 
-          {(isLoadingAgentResponse || isPending) && (
+          {(isLoadingAgentResponse || isPending) && !agentResponse && (
             <div className="flex items-center justify-center p-4 space-x-2 text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
               <span>Agent is thinking...</span>
@@ -375,10 +366,21 @@ export function VoiceLinkClient() {
 
           {!isLoadingAgentResponse && !isPending && agentResponse && (
             <div className="space-y-3">
-              <h3 className="font-headline text-lg font-medium text-foreground flex items-center">
-                <Bot className="w-5 h-5 mr-2 text-primary" />
-                Agent's Response:
-              </h3>
+              <div className="flex justify-between items-center">
+                <h3 className="font-headline text-lg font-medium text-foreground flex items-center">
+                  <Bot className="w-5 h-5 mr-2 text-primary" />
+                  Agent's Response:
+                </h3>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  onClick={() => playAgentResponse(agentResponse)} 
+                  disabled={isAudioPlaying || isLoadingAgentResponse || isPending || !agentResponse}
+                  aria-label="Play agent's response"
+                >
+                  {isAudioPlaying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Volume2 className="w-5 h-5 text-primary" />}
+                </Button>
+              </div>
               <Card className="bg-muted/50 p-4 shadow-inner">
                 <CardContent className="p-0">
                   <p className="text-foreground whitespace-pre-wrap">{agentResponse}</p>
@@ -402,6 +404,7 @@ export function VoiceLinkClient() {
 }
 
 // Define SpeechSynthesisVoice type if not available from a library
+// This is no longer used if we switch to cloud TTS fully, but keep for reference or if SpeechRecognition needs it.
 declare global {
   interface SpeechSynthesisVoice {
     default: boolean;
