@@ -39,19 +39,16 @@ export function VoiceLinkClient() {
       recognitionRef.current = new SpeechRecognitionAPI();
       recognitionRef.current.continuous = true;
       recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'ar-AE'; // Changed from 'en-US' to 'ar-AE' for Arabic
+      recognitionRef.current.lang = 'ar-AE';
 
       recognitionRef.current.onresult = (event: any) => {
-        let interimTranscription = '';
-        let finalTranscription = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalTranscription += event.results[i][0].transcript;
-          } else {
-            interimTranscription += event.results[i][0].transcript;
-          }
+        let fullTranscript = '';
+        // Iterate over all results received in this session so far
+        // to build the complete current transcription.
+        for (let i = 0; i < event.results.length; ++i) {
+          fullTranscript += event.results[i][0].transcript;
         }
-        setTranscription(prev => prev + finalTranscription + interimTranscription);
+        setTranscription(fullTranscript);
       };
 
       recognitionRef.current.onerror = (event: any) => {
@@ -59,6 +56,13 @@ export function VoiceLinkClient() {
         setMicrophoneError(`Speech recognition error: ${event.error}. Please try again or type your message.`);
         setIsRecording(false);
       };
+
+      recognitionRef.current.onend = () => {
+        // If recognition ends unexpectedly (not by user stopping), update recording state.
+        // However, we mostly control stop via button click.
+        // setIsRecording(false); // Consider if this is needed or could conflict
+      };
+
     } else {
       setMicrophoneError("Speech Recognition API is not supported by your browser. Please type your message.");
       setHasMicrophonePermission(false);
@@ -87,10 +91,10 @@ export function VoiceLinkClient() {
     };
     getMicrophonePermission();
 
-    // Setup audio element
     audioRef.current = new Audio();
     audioRef.current.onplay = () => setIsAudioPlaying(true);
     audioRef.current.onended = () => setIsAudioPlaying(false);
+    audioRef.current.onpause = () => setIsAudioPlaying(false); // Also handle pause
     audioRef.current.onerror = () => {
       setIsAudioPlaying(false);
       toast({
@@ -105,6 +109,7 @@ export function VoiceLinkClient() {
         recognitionRef.current.stop();
         recognitionRef.current.onresult = null;
         recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
         recognitionRef.current = null;
       }
       if (audioRef.current) {
@@ -112,6 +117,7 @@ export function VoiceLinkClient() {
         audioRef.current.src = '';
         audioRef.current.onplay = null;
         audioRef.current.onended = null;
+        audioRef.current.onpause = null;
         audioRef.current.onerror = null;
       }
     };
@@ -119,21 +125,39 @@ export function VoiceLinkClient() {
   }, []);
 
   const playAgentResponse = useCallback(async (text: string) => {
-    if (!text.trim() || !audioRef.current) return;
+    if (!text.trim() || !audioRef.current) {
+      setIsAudioPlaying(false);
+      return;
+    }
+    
+    if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
 
     setIsAudioPlaying(true); 
     try {
       const { audioUrl } = await generateSpeechAction(text);
       if (audioUrl && audioRef.current) {
         audioRef.current.src = audioUrl;
-        await audioRef.current.play();
+        await audioRef.current.play().catch(e => {
+          console.error("Audio play failed:", e);
+          setIsAudioPlaying(false);
+          toast({
+            title: "Audio Playback Failed",
+            description: "The browser prevented audio playback.",
+            variant: "destructive",
+          });
+        });
       } else if (!audioUrl) {
         setIsAudioPlaying(false);
-        toast({
-          title: "Speech Generation Failed",
-          description: "Could not generate audio for the agent's response.",
-          variant: "default",
-        });
+         if (text.trim()) { // Only show toast if text was not empty
+            toast({
+                title: "Speech Generation Failed",
+                description: "Could not generate audio for the response. Check API key or service.",
+                variant: "default",
+            });
+        }
       }
     } catch (e) {
       console.error("Error playing speech:", e);
@@ -148,13 +172,14 @@ export function VoiceLinkClient() {
 
   const handleSendMessage = useCallback(() => {
     if (isRecording && recognitionRef.current) {
-      recognitionRef.current.stop();
+      recognitionRef.current.stop(); // This will trigger onend, which might setIsRecording(false)
     }
-    setIsRecording(false);
+    setIsRecording(false); // Ensure it's set false here too
 
     if (audioRef.current && !audioRef.current.paused) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
+      setIsAudioPlaying(false);
     }
 
     const currentTranscription = transcription.trim();
@@ -177,7 +202,7 @@ export function VoiceLinkClient() {
             setAgentResponse(result.agentResponse);
             toast({
               title: "Agent Responded",
-              description: "The agent has replied to your message.",
+              // description: "The agent has replied to your message.", // Too verbose
             });
             await playAgentResponse(result.agentResponse);
           }
@@ -210,6 +235,7 @@ export function VoiceLinkClient() {
     if (audioRef.current && !audioRef.current.paused) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
+      setIsAudioPlaying(false);
     }
 
     if (!hasMicrophonePermission) {
@@ -228,8 +254,10 @@ export function VoiceLinkClient() {
 
     if (isRecording) {
       recognitionRef.current.stop();
-      setIsRecording(false);
+      setIsRecording(false); // State update
+      // handleSendMessage will be called if transcription has content due to onend or next check
       if (transcription.trim()) {
+         // Small delay to allow final transcription processing from onresult if any
         setTimeout(() => handleSendMessage(), 100);
       }
     } else {
@@ -259,6 +287,7 @@ export function VoiceLinkClient() {
      if (audioRef.current && !audioRef.current.paused) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
+      setIsAudioPlaying(false);
     }
     setIsRecording(false);
     setTranscription('');
@@ -266,7 +295,7 @@ export function VoiceLinkClient() {
     setError(null);
     setMicrophoneError(null);
     if (textareaRef.current) {
-      textareaRef.current.value = '';
+      textareaRef.current.value = ''; // Also clear the textarea visually
     }
     toast({
       title: "Cleared",
@@ -313,6 +342,7 @@ export function VoiceLinkClient() {
             <p className="text-sm text-muted-foreground h-5">
               {hasMicrophonePermission === false ? "Microphone access denied" :
                isRecording ? "Listening... (Tap to stop & send)" :
+               isLoadingAgentResponse || isPending ? "Processing..." :
                "Tap to talk"}
             </p>
           </div>
@@ -333,7 +363,7 @@ export function VoiceLinkClient() {
             <Textarea
               id="transcription-area"
               ref={textareaRef}
-              value={transcription}
+              value={transcription} // Controlled component
               onChange={(e) => setTranscription(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -349,7 +379,7 @@ export function VoiceLinkClient() {
             />
           </div>
 
-          {error && !microphoneError && (
+          {error && !microphoneError && ( // Only show general error if no mic error
             <Alert variant="destructive">
               <Info className="h-4 w-4" />
               <AlertTitle>Agent Error</AlertTitle>
@@ -375,10 +405,10 @@ export function VoiceLinkClient() {
                   variant="ghost" 
                   size="icon" 
                   onClick={() => playAgentResponse(agentResponse)} 
-                  disabled={isAudioPlaying || isLoadingAgentResponse || isPending || !agentResponse}
+                  disabled={isAudioPlaying || isLoadingAgentResponse || isPending || !agentResponse.trim()}
                   aria-label="Play agent's response"
                 >
-                  {isAudioPlaying ? <Loader2 className="h-5 w-5 animate-spin" /> : <Volume2 className="w-5 h-5 text-primary" />}
+                  {isAudioPlaying ? <Loader2 className="h-5 w-5 animate-spin text-primary" /> : <Volume2 className="w-5 h-5 text-primary" />}
                 </Button>
               </div>
               <Card className="bg-muted/50 p-4 shadow-inner">
@@ -414,4 +444,3 @@ declare global {
     voiceURI: string;
   }
 }
-
