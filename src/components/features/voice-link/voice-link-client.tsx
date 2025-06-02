@@ -1,3 +1,4 @@
+
 // src/components/features/voice-link/voice-link-client.tsx
 "use client";
 
@@ -102,6 +103,9 @@ export function VoiceLinkClient() {
         recognitionRef.current.onend = null;
         recognitionRef.current = null;
       }
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount
@@ -112,6 +116,10 @@ export function VoiceLinkClient() {
       recognitionRef.current.stop(); // Stop speech recognition if it's active
     }
     setIsRecording(false);
+
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Cancel any ongoing speech
+    }
 
     const currentTranscription = transcription.trim();
     if (currentTranscription) {
@@ -131,12 +139,26 @@ export function VoiceLinkClient() {
             });
           } else {
             setAgentResponse(result.agentResponse);
-             // Do not clear transcription here so user can see what was sent.
-             // setTranscription(''); // Clear transcription after sending
             toast({
               title: "Agent Responded",
               description: "The agent has replied to your message.",
             });
+
+            // Speak the response
+            if ('speechSynthesis' in window && 'SpeechSynthesisUtterance' in window) {
+              const utterance = new SpeechSynthesisUtterance(result.agentResponse);
+              // You can optionally configure voice, rate, pitch here
+              // e.g., utterance.lang = 'en-US';
+              // utterance.rate = 1.0; // Speed of speech
+              window.speechSynthesis.speak(utterance);
+            } else {
+              console.warn("Text-to-speech is not supported in this browser.");
+              toast({
+                title: "Text-to-Speech Not Supported",
+                description: "Your browser does not support speaking the agent's response.",
+                variant: "default"
+              });
+            }
           }
         } catch (e) {
           const errorMessage = e instanceof Error ? e.message : "An unknown error occurred.";
@@ -164,6 +186,10 @@ export function VoiceLinkClient() {
 
 
   const handleToggleRecording = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Cancel any ongoing speech
+    }
+
     if (!hasMicrophonePermission) {
       setMicrophoneError("Microphone access is required. Please enable it in your browser settings and refresh the page.");
       toast({
@@ -181,15 +207,11 @@ export function VoiceLinkClient() {
     if (isRecording) {
       recognitionRef.current.stop();
       setIsRecording(false);
-      // Message will be sent if transcription is not empty by handleSendMessage logic
-      // or if user clicks "Send Message" button
-      // For immediate send on stop:
       if (transcription.trim()) {
         handleSendMessage();
       }
     } else {
-      // Start recording
-      setTranscription(''); // Clear previous transcription before starting new recording
+      setTranscription(''); 
       setAgentResponse('');
       setError(null);
       setMicrophoneError(null);
@@ -212,13 +234,16 @@ export function VoiceLinkClient() {
     if (isRecording && recognitionRef.current) {
       recognitionRef.current.stop();
     }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Cancel any ongoing speech
+    }
     setIsRecording(false);
     setTranscription('');
     setAgentResponse('');
     setError(null);
-    setMicrophoneError(null); // Also clear microphone error on manual clear
+    setMicrophoneError(null);
     if (textareaRef.current) {
-      textareaRef.current.value = ''; // Ensure textarea is visually cleared
+      textareaRef.current.value = ''; 
     }
     toast({
       title: "Cleared",
@@ -227,7 +252,6 @@ export function VoiceLinkClient() {
   };
 
   useEffect(() => {
-    // Update textarea when transcription changes from speech recognition
     if (textareaRef.current) {
       textareaRef.current.value = transcription;
     }
@@ -286,8 +310,8 @@ export function VoiceLinkClient() {
             <Textarea
               id="transcription-area"
               ref={textareaRef}
-              value={transcription} // Controlled component
-              onChange={(e) => setTranscription(e.target.value)} // Allow typing
+              value={transcription} 
+              onChange={(e) => setTranscription(e.target.value)} 
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -302,7 +326,7 @@ export function VoiceLinkClient() {
             />
           </div>
 
-          {error && !microphoneError && ( // Don't show general error if there's a specific mic error
+          {error && !microphoneError && ( 
             <Alert variant="destructive">
               <Info className="h-4 w-4" />
               <AlertTitle>Agent Error</AlertTitle>
