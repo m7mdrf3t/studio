@@ -1,0 +1,21 @@
+'use client';
+
+import { aiApi } from '@/lib/api-client';
+
+// Import types - maintaining the same interface for compatibility
+import type { SuggestActionsOutput } from '@/ai/flows/suggest-actions';
+
+export async function suggestActionsAction(transcription: string): Promise<SuggestActionsOutput> {
+  if (!transcription.trim()) {
+    return { suggestedActions: [] };
+  }
+
+  try {
+    // Call the backend API instead of direct function call
+    const output = await aiApi.suggestActions(transcription);
+    return output as SuggestActionsOutput;
+  } catch (error) {
+    console.error("Error suggesting actions:", error);
+    return { suggestedActions: [] };
+  }
+}

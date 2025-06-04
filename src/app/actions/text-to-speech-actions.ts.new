@@ -1,0 +1,21 @@
+'use client';
+
+import { aiApi } from '@/lib/api-client';
+
+export async function textToSpeechAction(
+  text: string, 
+  voiceId?: string
+): Promise<{ audioUrl: string; success: boolean }> {
+  if (!text.trim()) {
+    return { audioUrl: '', success: false };
+  }
+
+  try {
+    // Call the backend API instead of direct function call
+    const result = await aiApi.textToSpeech(text, voiceId);
+    return result;
+  } catch (error) {
+    console.error("Error converting text to speech:", error);
+    return { audioUrl: '', success: false };
+  }
+}

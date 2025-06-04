@@ -1,0 +1,24 @@
+'use client';
+
+import { aiApi } from '@/lib/api-client';
+
+// Import types - maintaining the same interface for compatibility
+import type { InteractiveAgentOutput, DayOffDetails } from '@/ai/flows/interactive-agent-flow';
+
+export async function getAgentResponseAction(
+  userInput: string,
+  previousDayOffRequestDetails?: DayOffDetails
+): Promise<InteractiveAgentOutput> {
+  if (!userInput.trim()) {
+    return { agentResponse: "Please say something!" };
+  }
+
+  try {
+    // Call the backend API instead of direct function call
+    const output = await aiApi.getAgentResponse(userInput, previousDayOffRequestDetails);
+    return output as InteractiveAgentOutput;
+  } catch (error) {
+    console.error("Error getting agent response:", error);
+    return { agentResponse: "Sorry, I encountered an error trying to respond." };
+  }
+}
